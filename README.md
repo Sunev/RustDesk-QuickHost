@@ -2,9 +2,9 @@
 
 Native C++ host-only RustDesk-compatible remote support client for Windows XP / 7 / 10 / 11.
 
-![Downloads](https://img.shields.io/github/downloads/Terence0816/RustDesk-QuickHos/total?label=Downloads)
-[Releases](https://github.com/Terence0816/RustDesk-QuickHos/releases) |
-[Latest Official Build v1.0.0.0](https://github.com/Terence0816/RustDesk-QuickHos/releases/tag/v1.0.0.0) |
+![Downloads](https://img.shields.io/github/downloads/Terence0816/RustDesk-QuickHost/total?label=Downloads)
+[Releases](https://github.com/Terence0816/RustDesk-QuickHost/releases) |
+[Latest Official Build v1.0.0.0](https://github.com/Terence0816/RustDesk-QuickHost/releases/tag/V1.0.0.0) |
 [GPL-3.0 License](LICENSE)
 
 English | [繁體中文](#繁體中文)
@@ -141,7 +141,7 @@ To use a custom Japanese file, save it as:
 jp.txt
 ```
 
-Then set it in `rustdesk_cpp_host.ini`:
+Then select `jp.txt` from the program language menu, or set it manually in `rustdesk_cpp_host.ini`:
 
 ```ini
 language_file=jp.txt
@@ -149,8 +149,8 @@ language_file=jp.txt
 
 ## Download
 
-- Release page: [Releases](https://github.com/Terence0816/RustDesk-QuickHos/releases)
-- Official `v1.0.0.0` build: [RustDeskQS.exe](https://github.com/Terence0816/RustDesk-QuickHos/releases/tag/v1.0.0.0)
+- Release page: [Releases](https://github.com/Terence0816/RustDesk-QuickHost/releases)
+- Official `v1.0.0.0` build: [RustDeskQS.exe](https://github.com/Terence0816/RustDesk-QuickHost/releases/tag/V1.0.0.0)
 - GitHub release assets show the current download count for the official build.
 
 ## Search Keywords
@@ -306,7 +306,7 @@ tray_exit=離開
 jp.txt
 ```
 
-然後在 `rustdesk_cpp_host.ini` 設定：
+接著可直接從程式的語言選單選擇 `jp.txt`，也可以手動在 `rustdesk_cpp_host.ini` 設定：
 
 ```ini
 language_file=jp.txt
@@ -314,8 +314,8 @@ language_file=jp.txt
 
 ## 下載
 
-- Release 頁面：[Releases](https://github.com/Terence0816/RustDesk-QuickHos/releases)
-- 官方 `v1.0.0.0` 版本：[RustDeskQS.exe](https://github.com/Terence0816/RustDesk-QuickHos/releases/tag/v1.0.0.0)
+- Release 頁面：[Releases](https://github.com/Terence0816/RustDesk-QuickHost/releases)
+- 官方 `v1.0.0.0` 版本：[RustDeskQS.exe](https://github.com/Terence0816/RustDesk-QuickHost/releases/tag/V1.0.0.0)
 - GitHub Release Assets 會顯示目前官方版本的下載次數。
 
 ## 搜尋關鍵字
