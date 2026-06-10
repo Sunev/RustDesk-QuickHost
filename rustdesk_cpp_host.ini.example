@@ -1,0 +1,14 @@
+[server]
+id_server=rs-ny.rustdesk.com:21116
+relay_server=rs-ny.rustdesk.com:21117
+api_server=
+key=OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=
+
+[host]
+id=
+language_file=tw.txt
+temporary_password_length=6
+force_relay=1
+preferred_codec=h264
+video_fps=30
+video_bitrate_kbps=20000
