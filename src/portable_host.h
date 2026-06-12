@@ -149,6 +149,8 @@ struct HostConfig {
   bool random_password_enabled = true;
   std::wstring fixed_password_protected;
   bool force_relay = true;
+  bool direct_access_enabled = true;
+  int direct_access_port = 21118;
   std::wstring preferred_codec;
   int video_fps = 30;
   int video_bitrate_kbps = 20000;
@@ -177,7 +179,7 @@ class PortableHostApp {
 
   static constexpr UINT_PTR kUiRefreshTimerId = 1;
   static constexpr int kWindowWidth = 252;
-  static constexpr int kWindowHeight = 320;
+  static constexpr int kWindowHeight = 418;
   static constexpr int kControlMargin = 16;
   static constexpr int kEditHeight = 34;
 
@@ -213,9 +215,19 @@ class PortableHostApp {
   bool EnsureIncomingApprovalWindow();
   void DestroyIncomingApprovalWindow();
   void LayoutIncomingApprovalWindow(int client_width, int client_height);
+  void CaptureIncomingApprovalRemoteIdentity(
+      std::wstring* remote_id,
+      std::wstring* remote_name) const;
   std::wstring GetIncomingApprovalDisplayName() const;
   std::wstring GetIncomingApprovalSecondaryText() const;
   bool DrawOwnerButton(const DRAWITEMSTRUCT* draw_item) const;
+  void DrawConnectionStatusCard(HDC dc) const;
+  void InvalidateConnectionStatusCard() const;
+  void StoreActiveSessionIdentity(
+      const std::wstring& remote_id,
+      const std::wstring& remote_name);
+  void ClearActiveSessionIdentity();
+  std::wstring GetActiveSessionDisplayName() const;
 
   void LoadOrCreateConfig();
   void SaveConfig() const;
@@ -322,9 +334,11 @@ class PortableHostApp {
   HWND password_label_ = nullptr;
   HWND password_value_ = nullptr;
   HWND refresh_password_button_ = nullptr;
+  HWND disconnect_button_ = nullptr;
   HWND server_status_label_ = nullptr;
   HWND server_value_label_ = nullptr;
   HWND config_path_label_ = nullptr;
+  RECT connection_status_card_rect_ = {};
 
   HostConfig config_;
   std::wstring temporary_password_;
@@ -339,6 +353,8 @@ class PortableHostApp {
   std::wstring public_key_hex_;
   std::wstring secret_key_hex_;
   std::wstring device_uuid_text_;
+  std::wstring active_session_remote_id_;
+  std::wstring active_session_remote_name_;
   Win32Thread rendezvous_thread_;
   Win32Thread active_session_thread_;
   std::atomic<bool> stop_rendezvous_{false};

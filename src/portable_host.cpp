@@ -559,6 +559,7 @@ constexpr UINT kAppIncomingApprovalUpdated = WM_APP + 4;
 constexpr UINT kIdValue = 1001;
 constexpr UINT kPasswordValue = 1002;
 constexpr UINT kRefreshPasswordButton = 1003;
+constexpr UINT kDisconnectButton = 1004;
 constexpr UINT kOptionsButton = 1005;
 constexpr UINT kTrayMenuShowWindow = 1101;
 constexpr UINT kTrayMenuExit = 1102;
@@ -580,6 +581,17 @@ constexpr COLORREF kMutedTextColor = RGB(184, 186, 191);
 constexpr COLORREF kAccentColor = RGB(48, 133, 255);
 constexpr COLORREF kSecondaryButtonColor = RGB(52, 54, 61);
 constexpr COLORREF kSecondaryButtonBorderColor = RGB(74, 77, 84);
+constexpr COLORREF kConnectionCardIdleFillColor = RGB(48, 49, 55);
+constexpr COLORREF kConnectionCardIdleBorderColor = RGB(101, 104, 113);
+constexpr COLORREF kConnectionCardConnectedFillColor = RGB(26, 48, 79);
+constexpr COLORREF kConnectionCardConnectedBorderColor = RGB(48, 133, 255);
+constexpr COLORREF kConnectionCardConnectedTextColor = RGB(97, 187, 255);
+constexpr COLORREF kConnectionNameAccentColor = RGB(255, 209, 84);
+constexpr COLORREF kDisabledButtonFillColor = RGB(78, 80, 86);
+constexpr COLORREF kDisabledButtonBorderColor = RGB(86, 88, 94);
+constexpr COLORREF kDisabledButtonTextColor = RGB(120, 122, 128);
+constexpr COLORREF kDisconnectButtonColor = RGB(255, 79, 62);
+constexpr COLORREF kDisconnectButtonPressedColor = RGB(237, 66, 50);
 constexpr COLORREF kDialogColor = RGB(27, 29, 34);
 constexpr COLORREF kAvatarColor = RGB(132, 85, 131);
 constexpr COLORREF kGoodColor = RGB(68, 204, 153);
@@ -588,6 +600,7 @@ constexpr int kLogoTargetWidth = 200;
 constexpr int kLogoTargetHeight = 64;
 constexpr int kDefaultIdServerPort = 21116;
 constexpr int kDefaultRelayServerPort = 21117;
+constexpr int kDefaultDirectAccessPort = 21118;
 constexpr int kDefaultKeepAliveMs = 60000;
 constexpr int kRegisterIntervalMs = 15000;
 constexpr unsigned long kConnectTimeoutMs = 18000;
@@ -638,6 +651,10 @@ const LanguageEntry kTraditionalChineseLanguageEntries[] = {
     {L"hint_provide_id_password", L"請提供下面的 ID 及密碼"},
     {L"label_id", L"ID"},
     {L"label_one_time_password", L"一次性密碼"},
+    {L"connection_status_disconnected", L"\u672a\u9023\u7dda"},
+    {L"connection_status_authorized", L"\u5df2\u9023\u5165 (\u5df2\u6388\u6b0a)"},
+    {L"connection_status_remote_user", L"\u9023\u7dda\u4eba\u54e1"},
+    {L"button_disconnect_session", L"\u4e2d\u65b7\u9023\u7dda"},
     {L"status_server_ready", L"伺服器已就緒"},
     {L"status_server_connecting", L"正在連線伺服器"},
     {L"status_server_unreachable", L"伺服器無法連線"},
@@ -677,6 +694,10 @@ const LanguageEntry kEnglishLanguageEntries[] = {
     {L"hint_provide_id_password", L"Share this ID and password"},
     {L"label_id", L"ID"},
     {L"label_one_time_password", L"Passcode"},
+    {L"connection_status_disconnected", L"Not connected"},
+    {L"connection_status_authorized", L"Connected (Authorized)"},
+    {L"connection_status_remote_user", L"Connected user"},
+    {L"button_disconnect_session", L"Disconnect"},
     {L"status_server_ready", L"Server Ready"},
     {L"status_server_connecting", L"Connecting to Server"},
     {L"status_server_unreachable", L"Server Unreachable"},
@@ -1155,6 +1176,28 @@ std::wstring GetEffectivePreferredCodec(const std::wstring& preferred_codec) {
     return L"vp8-software";
   }
   return NormalizePreferredCodec(preferred_codec);
+}
+
+bool ParseIniBoolValue(const std::wstring& value, bool default_value) {
+  const std::wstring normalized = Trim(value);
+  if (normalized.empty()) {
+    return default_value;
+  }
+  if (_wcsicmp(normalized.c_str(), L"1") == 0 ||
+      _wcsicmp(normalized.c_str(), L"true") == 0 ||
+      _wcsicmp(normalized.c_str(), L"yes") == 0 ||
+      _wcsicmp(normalized.c_str(), L"y") == 0 ||
+      _wcsicmp(normalized.c_str(), L"on") == 0) {
+    return true;
+  }
+  if (_wcsicmp(normalized.c_str(), L"0") == 0 ||
+      _wcsicmp(normalized.c_str(), L"false") == 0 ||
+      _wcsicmp(normalized.c_str(), L"no") == 0 ||
+      _wcsicmp(normalized.c_str(), L"n") == 0 ||
+      _wcsicmp(normalized.c_str(), L"off") == 0) {
+    return false;
+  }
+  return default_value;
 }
 
 bool TryFillRandomBytes(void* buffer, size_t size) {
@@ -7957,6 +8000,11 @@ LRESULT PortableHostApp::WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPA
         RefreshUiText();
         return 0;
       }
+      if (control_id == kDisconnectButton) {
+        StopActiveSession(true);
+        RefreshUiText();
+        return 0;
+      }
       if (control_id == kOptionsMenuLaunchOnStartup) {
         ToggleLaunchOnStartup();
         return 0;
@@ -8049,6 +8097,7 @@ LRESULT PortableHostApp::WindowProc(HWND hwnd, UINT message, WPARAM w_param, LPA
           dc,
           &client_rect,
           dark_brush_ != nullptr ? dark_brush_ : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+      DrawConnectionStatusCard(dc);
 
       EndPaint(hwnd, &paint);
       return 0;
@@ -8595,6 +8644,18 @@ void PortableHostApp::LayoutIncomingApprovalWindow(int client_width, int client_
   }
 }
 
+void PortableHostApp::CaptureIncomingApprovalRemoteIdentity(
+    std::wstring* remote_id,
+    std::wstring* remote_name) const {
+  Win32LockGuard guard(incoming_approval_mutex_);
+  if (remote_id != nullptr) {
+    *remote_id = incoming_approval_remote_id_;
+  }
+  if (remote_name != nullptr) {
+    *remote_name = incoming_approval_remote_name_;
+  }
+}
+
 std::wstring PortableHostApp::GetIncomingApprovalDisplayName() const {
   Win32LockGuard guard(incoming_approval_mutex_);
   const std::wstring remote_name = Trim(incoming_approval_remote_name_);
@@ -8637,6 +8698,153 @@ std::wstring PortableHostApp::GetIncomingApprovalSecondaryText() const {
   return L"";
 }
 
+void PortableHostApp::StoreActiveSessionIdentity(
+    const std::wstring& remote_id,
+    const std::wstring& remote_name) {
+  {
+    Win32LockGuard guard(active_session_mutex_);
+    active_session_remote_id_ = Trim(remote_id);
+    active_session_remote_name_ = Trim(remote_name);
+  }
+  InvalidateConnectionStatusCard();
+  if (window_ != nullptr) {
+    PostMessageW(window_, kAppRendezvousStatus, 0, 0);
+  }
+}
+
+void PortableHostApp::ClearActiveSessionIdentity() {
+  {
+    Win32LockGuard guard(active_session_mutex_);
+    active_session_remote_id_.clear();
+    active_session_remote_name_.clear();
+  }
+  InvalidateConnectionStatusCard();
+  if (window_ != nullptr) {
+    PostMessageW(window_, kAppRendezvousStatus, 0, 0);
+  }
+}
+
+std::wstring PortableHostApp::GetActiveSessionDisplayName() const {
+  std::wstring remote_id;
+  std::wstring remote_name;
+  {
+    Win32LockGuard guard(active_session_mutex_);
+    remote_id = Trim(active_session_remote_id_);
+    remote_name = Trim(active_session_remote_name_);
+  }
+
+  const bool generic_system_name =
+      !remote_name.empty() &&
+      (_wcsicmp(remote_name.c_str(), L"administrator") == 0 ||
+       _wcsicmp(remote_name.c_str(), L"admin") == 0 ||
+       _wcsicmp(remote_name.c_str(), L"system") == 0);
+  if (!remote_name.empty() && !generic_system_name) {
+    return remote_name;
+  }
+  if (!remote_id.empty()) {
+    return FormatDisplayHostId(remote_id);
+  }
+  if (!remote_name.empty()) {
+    return remote_name;
+  }
+  return GetText(L"incoming_unknown_device", L"\u672a\u77e5\u88dd\u7f6e");
+}
+
+void PortableHostApp::InvalidateConnectionStatusCard() const {
+  if (window_ == nullptr || IsRectEmpty(&connection_status_card_rect_)) {
+    return;
+  }
+  InvalidateRect(window_, &connection_status_card_rect_, TRUE);
+  if (disconnect_button_ != nullptr) {
+    InvalidateRect(disconnect_button_, nullptr, TRUE);
+  }
+}
+
+void PortableHostApp::DrawConnectionStatusCard(HDC dc) const {
+  if (IsRectEmpty(&connection_status_card_rect_)) {
+    return;
+  }
+
+  const bool connected = active_session_connected_.load();
+  const std::wstring status_text = GetText(
+      connected ? L"connection_status_authorized" : L"connection_status_disconnected",
+      connected ? L"\u5df2\u9023\u5165 (\u5df2\u6388\u6b0a)" : L"\u672a\u9023\u7dda");
+  const std::wstring remote_user_prefix =
+      GetText(L"connection_status_remote_user", L"\u9023\u7dda\u4eba\u54e1") + L": ";
+  const std::wstring display_name =
+      connected ? GetActiveSessionDisplayName() : L"----------";
+
+  RECT card_rect = connection_status_card_rect_;
+  DrawRoundedBlock(
+      dc,
+      card_rect,
+      ScaleForSystemDpi(12),
+      connected ? kConnectionCardConnectedFillColor : kConnectionCardIdleFillColor,
+      connected ? kConnectionCardConnectedBorderColor : kConnectionCardIdleBorderColor);
+
+  RECT content_rect = card_rect;
+  InflateRect(&content_rect, -ScaleForSystemDpi(16), -ScaleForSystemDpi(14));
+  SetBkMode(dc, TRANSPARENT);
+
+  const int dot_size = ScaleForSystemDpi(10);
+  RECT dot_rect = {
+      content_rect.left,
+      content_rect.top + ScaleForSystemDpi(3),
+      content_rect.left + dot_size,
+      content_rect.top + ScaleForSystemDpi(3) + dot_size};
+  HBRUSH dot_brush = CreateSolidBrush(connected ? kGoodColor : RGB(165, 168, 174));
+  if (dot_brush != nullptr) {
+    HGDIOBJ old_brush = SelectObject(dc, dot_brush);
+    HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, dot_rect.left, dot_rect.top, dot_rect.right, dot_rect.bottom);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    DeleteObject(dot_brush);
+  }
+
+  HFONT status_font =
+      font_button_ != nullptr ? font_button_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  HFONT small_font =
+      font_small_ != nullptr ? font_small_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  HGDIOBJ old_font = SelectObject(dc, status_font);
+
+  RECT status_rect = content_rect;
+  status_rect.left = dot_rect.right + ScaleForSystemDpi(8);
+  status_rect.top -= ScaleForSystemDpi(1);
+  status_rect.bottom = status_rect.top + ScaleForSystemDpi(20);
+  SetTextColor(dc, connected ? kConnectionCardConnectedTextColor : RGB(244, 245, 247));
+  DrawTextW(dc, status_text.c_str(), -1, &status_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+  auto draw_labeled_value = [&](int top,
+                                const std::wstring& prefix,
+                                const std::wstring& value,
+                                COLORREF prefix_color,
+                                COLORREF value_color) {
+    RECT prefix_rect = content_rect;
+    prefix_rect.top = top;
+    prefix_rect.bottom = top + ScaleForSystemDpi(20);
+    SetTextColor(dc, prefix_color);
+    SelectObject(dc, small_font);
+    DrawTextW(dc, prefix.c_str(), -1, &prefix_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    SIZE prefix_size = {};
+    GetTextExtentPoint32W(dc, prefix.c_str(), static_cast<int>(prefix.size()), &prefix_size);
+    RECT value_rect = prefix_rect;
+    value_rect.left += prefix_size.cx;
+    SetTextColor(dc, value_color);
+    DrawTextW(dc, value.c_str(), -1, &value_rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+  };
+
+  draw_labeled_value(
+      content_rect.top + ScaleForSystemDpi(24),
+      remote_user_prefix,
+      display_name,
+      connected ? RGB(224, 228, 234) : RGB(198, 201, 208),
+      connected ? kConnectionNameAccentColor : RGB(214, 217, 223));
+
+  SelectObject(dc, old_font);
+}
+
 bool PortableHostApp::DrawOwnerButton(const DRAWITEMSTRUCT* draw_item) const {
   if (draw_item == nullptr || draw_item->CtlType != ODT_BUTTON) {
     return false;
@@ -8647,17 +8855,25 @@ bool PortableHostApp::DrawOwnerButton(const DRAWITEMSTRUCT* draw_item) const {
   const bool icon_button =
       control_id == kOptionsButton || control_id == kRefreshPasswordButton;
   const bool secondary = control_id == kIncomingApprovalDismissButton;
+  const bool disconnect_button = control_id == kDisconnectButton;
   const bool disabled = (draw_item->itemState & ODS_DISABLED) != 0;
   const bool selected = (draw_item->itemState & ODS_SELECTED) != 0;
-  COLORREF fill_color = primary ? kAccentColor : (secondary ? kSecondaryButtonColor : kWindowColor);
-  COLORREF border_color =
-      primary ? kAccentColor : (secondary ? kSecondaryButtonBorderColor : kWindowColor);
+  COLORREF fill_color = primary
+      ? kAccentColor
+      : (secondary
+            ? kSecondaryButtonColor
+            : (disconnect_button ? kDisconnectButtonColor : kWindowColor));
+  COLORREF border_color = primary
+      ? kAccentColor
+      : (secondary
+            ? kSecondaryButtonBorderColor
+            : (disconnect_button ? kDisconnectButtonColor : kWindowColor));
   COLORREF text_color = icon_button ? RGB(222, 224, 228) : kTextColor;
 
   if (disabled) {
-    fill_color = icon_button ? kWindowColor : RGB(78, 80, 86);
-    border_color = icon_button ? kWindowColor : RGB(86, 88, 94);
-    text_color = RGB(120, 122, 128);
+    fill_color = icon_button ? kWindowColor : kDisabledButtonFillColor;
+    border_color = icon_button ? kWindowColor : kDisabledButtonBorderColor;
+    text_color = kDisabledButtonTextColor;
   } else if (selected) {
     if (icon_button) {
       fill_color = kWindowColor;
@@ -8665,6 +8881,9 @@ bool PortableHostApp::DrawOwnerButton(const DRAWITEMSTRUCT* draw_item) const {
     } else if (primary) {
       fill_color = RGB(32, 118, 244);
       border_color = RGB(32, 118, 244);
+    } else if (disconnect_button) {
+      fill_color = kDisconnectButtonPressedColor;
+      border_color = kDisconnectButtonPressedColor;
     } else if (secondary) {
       fill_color = RGB(61, 64, 72);
       border_color = RGB(77, 80, 88);
@@ -8976,6 +9195,7 @@ void PortableHostApp::DestroyFonts() {
 void PortableHostApp::CreateControls() {
   const DWORD static_style = WS_CHILD | WS_VISIBLE;
   const DWORD edit_style = WS_CHILD | WS_VISIBLE | ES_READONLY | ES_AUTOHSCROLL;
+  const DWORD button_style = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW;
   const DWORD icon_button_style = WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW;
 
   if (logo_bitmap_ != nullptr) {
@@ -9137,6 +9357,20 @@ void PortableHostApp::CreateControls() {
         GetWindowLongPtrW(refresh_password_button_, GWL_STYLE) & ~WS_TABSTOP);
   }
 
+  disconnect_button_ = CreateWindowExW(
+      0,
+      L"BUTTON",
+      L"",
+      button_style,
+      0,
+      0,
+      0,
+      0,
+      window_,
+      reinterpret_cast<HMENU>(kDisconnectButton),
+      instance_,
+      nullptr);
+
   server_status_label_ = CreateWindowExW(
       0, L"STATIC", L"\u4f3a\u670d\u5668\u72c0\u614b", static_style | SS_CENTERIMAGE,
       0, 0, 0, 0, window_, nullptr, instance_, nullptr);
@@ -9172,7 +9406,6 @@ void PortableHostApp::CreateControls() {
 }
 
 void PortableHostApp::ApplyFonts() {
-  const bool use_xp_status_layout = IsWindowsXpOrEarlier();
   const HWND controls[] = {
       logo_icon_,
       title_label_,
@@ -9186,6 +9419,7 @@ void PortableHostApp::ApplyFonts() {
       password_label_,
       password_value_,
       refresh_password_button_,
+      disconnect_button_,
       server_status_label_,
       server_value_label_,
       config_path_label_,
@@ -9204,12 +9438,13 @@ void PortableHostApp::ApplyFonts() {
   SendMessageW(password_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_body_), TRUE);
   SendMessageW(subtitle_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_small_), TRUE);
   SendMessageW(hint_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_small_), TRUE);
+  SendMessageW(disconnect_button_, WM_SETFONT, reinterpret_cast<WPARAM>(font_button_), TRUE);
   SendMessageW(
       server_status_label_,
       WM_SETFONT,
-      reinterpret_cast<WPARAM>(use_xp_status_layout ? font_body_ : font_value_),
+      reinterpret_cast<WPARAM>(font_body_),
       TRUE);
-  SendMessageW(server_value_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_button_), TRUE);
+  SendMessageW(server_value_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_body_), TRUE);
   SendMessageW(config_path_label_, WM_SETFONT, reinterpret_cast<WPARAM>(font_small_), TRUE);
 }
 
@@ -9231,13 +9466,13 @@ void PortableHostApp::LayoutControls(int client_width, int client_height) {
   int top = ScaleForSystemDpi(13);
 
   MoveWindow(logo_icon_, left, top, width, ScaleForSystemDpi(64), TRUE);
-  top += ScaleForSystemDpi(70);
+  top += ScaleForSystemDpi(68);
 
   MoveWindow(title_label_, left, top, width, ScaleForSystemDpi(33), TRUE);
-  top += ScaleForSystemDpi(35);
+  top += ScaleForSystemDpi(34);
 
   MoveWindow(hint_label_, left, top, width, ScaleForSystemDpi(23), TRUE);
-  top += ScaleForSystemDpi(26);
+  top += ScaleForSystemDpi(24);
 
   MoveWindow(id_accent_, left, top, ScaleForSystemDpi(3), block_height, TRUE);
   MoveWindow(
@@ -9259,7 +9494,7 @@ void PortableHostApp::LayoutControls(int client_width, int client_height) {
       icon_button_width,
       icon_button_height,
       TRUE);
-  top += block_height + ScaleForSystemDpi(8);
+  top += block_height + ScaleForSystemDpi(6);
 
   MoveWindow(password_accent_, left, top, ScaleForSystemDpi(3), block_height, TRUE);
   MoveWindow(
@@ -9287,13 +9522,30 @@ void PortableHostApp::LayoutControls(int client_width, int client_height) {
       icon_button_width,
       icon_button_height,
       TRUE);
-  top += block_height + ScaleForSystemDpi(12);
+  top += block_height + ScaleForSystemDpi(8);
 
-  const int status_top = top + ScaleForSystemDpi(2);
+  const int connection_card_height = ScaleForSystemDpi(102);
+  SetRect(
+      &connection_status_card_rect_,
+      left,
+      top,
+      left + width,
+      top + connection_card_height);
+  MoveWindow(
+      disconnect_button_,
+      left + ScaleForSystemDpi(16),
+      connection_status_card_rect_.bottom - ScaleForSystemDpi(40),
+      width - ScaleForSystemDpi(32),
+      ScaleForSystemDpi(32),
+      TRUE);
+  top = connection_status_card_rect_.bottom + ScaleForSystemDpi(5);
+
+  const int status_top = top;
   const int status_label_left = left + ScaleForSystemDpi(use_xp_status_layout ? 8 : 10);
-  const int status_label_top = status_top + ScaleForSystemDpi(use_xp_status_layout ? 3 : 2);
+  const int status_label_top =
+      status_top + ScaleForSystemDpi(use_xp_status_layout ? 2 : 0);
   const int status_label_width = ScaleForSystemDpi(use_xp_status_layout ? 18 : 16);
-  const int status_label_height = ScaleForSystemDpi(use_xp_status_layout ? 20 : 22);
+  const int status_label_height = ScaleForSystemDpi(use_xp_status_layout ? 17 : 18);
   const int status_text_left =
       status_label_left + status_label_width + ScaleForSystemDpi(use_xp_status_layout ? 8 : 3);
   const int status_text_width =
@@ -9328,6 +9580,8 @@ void PortableHostApp::LoadOrCreateConfig() {
     config_.relay_server = L"rs-ny.rustdesk.com:21117";
     config_.api_server.clear();
     config_.key = L"OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=";
+    config_.direct_access_enabled = true;
+    config_.direct_access_port = kDefaultDirectAccessPort;
     config_.preferred_codec = NormalizePreferredCodec(L"h264");
     config_.video_fps = kDefaultTargetVideoFps;
     config_.video_bitrate_kbps = kDefaultVideoBitrateKbps;
@@ -9405,6 +9659,32 @@ void PortableHostApp::LoadOrCreateConfig() {
   const std::wstring force_relay_text = ReadIniString(L"host", L"force_relay", L"1");
   config_.force_relay = force_relay_text != L"0";
 
+  const std::wstring direct_access_enabled_text =
+      ReadIniString(L"host", L"direct_access_enabled", L"");
+  if (!Trim(direct_access_enabled_text).empty()) {
+    config_.direct_access_enabled =
+        ParseIniBoolValue(direct_access_enabled_text, true);
+  } else {
+    config_.direct_access_enabled = ParseIniBoolValue(
+        ReadIniString(L"host", L"direct-server", L""),
+        true);
+  }
+
+  std::wstring direct_access_port_text =
+      ReadIniString(L"host", L"direct_access_port", L"");
+  if (Trim(direct_access_port_text).empty()) {
+    direct_access_port_text =
+        ReadIniString(L"host", L"direct-access-port", L"");
+  }
+  const int parsed_direct_access_port =
+      _wtoi(direct_access_port_text.c_str());
+  if (parsed_direct_access_port >= 1 &&
+      parsed_direct_access_port <= 65535) {
+    config_.direct_access_port = parsed_direct_access_port;
+  } else {
+    config_.direct_access_port = kDefaultDirectAccessPort;
+  }
+
   const std::wstring video_fps_text =
       ReadIniString(L"host", L"video_fps", std::to_wstring(kDefaultTargetVideoFps).c_str());
   const int parsed_video_fps = _wtoi(video_fps_text.c_str());
@@ -9445,6 +9725,8 @@ void PortableHostApp::SaveConfig() const {
   WriteIniString(L"host", L"random_password_enabled", config_.random_password_enabled ? L"1" : L"0");
   WriteIniString(L"host", L"fixed_password_protected", config_.fixed_password_protected);
   WriteIniString(L"host", L"force_relay", config_.force_relay ? L"1" : L"0");
+  WriteIniString(L"host", L"direct_access_enabled", config_.direct_access_enabled ? L"1" : L"0");
+  WriteIniString(L"host", L"direct_access_port", std::to_wstring(config_.direct_access_port));
   WriteIniString(L"host", L"preferred_codec", config_.preferred_codec.empty() ? L"h264" : config_.preferred_codec);
   WriteIniString(L"host", L"video_fps", std::to_wstring(config_.video_fps));
   WriteIniString(L"host", L"video_bitrate_kbps", std::to_wstring(config_.video_bitrate_kbps));
@@ -10019,6 +10301,10 @@ void PortableHostApp::RefreshUiText() {
       config_.random_password_enabled ? temporary_password_.c_str() : L"------");
   SetWindowTextW(refresh_password_button_, L"");
   EnableWindow(refresh_password_button_, config_.random_password_enabled ? TRUE : FALSE);
+  SetWindowTextW(
+      disconnect_button_,
+      GetText(L"button_disconnect_session", L"\u4e2d\u65b7\u9023\u7dda").c_str());
+  EnableWindow(disconnect_button_, active_session_connected_.load() ? TRUE : FALSE);
   SetWindowTextW(server_status_label_, L"\u25cf");
   const bool registered = IsRendezvousRegistered();
   const std::wstring rendezvous_status = GetRendezvousStatusText();
@@ -10072,6 +10358,7 @@ void PortableHostApp::RefreshUiText() {
     }
     InvalidateRect(incoming_approval_window_, nullptr, TRUE);
   }
+  InvalidateConnectionStatusCard();
 }
 
 void PortableHostApp::ShowOptionsMenu() {
@@ -10300,6 +10587,7 @@ void PortableHostApp::StartRendezvousWorker() {
     pending_session_requested_ = false;
     pending_session_generation_ = 0;
   }
+  ClearActiveSessionIdentity();
   if (!rendezvous_thread_.Start([this]() { RendezvousWorker(); })) {
     SetRendezvousStatus(L"failed to start rendezvous worker thread", false);
   }
@@ -10332,6 +10620,7 @@ void PortableHostApp::StopActiveSession(bool notify_peer) {
   stop_active_session_.store(true);
   active_session_manual_close_requested_.store(notify_peer);
   active_session_connected_.store(false);
+  ClearActiveSessionIdentity();
 
   if (notify_peer) {
     return;
@@ -10387,6 +10676,7 @@ void PortableHostApp::ActiveSessionWorker() {
     active_session_running_.store(false);
     active_session_connected_.store(false);
     ClearActiveSessionConnection(nullptr);
+    ClearActiveSessionIdentity();
 
     bool has_pending_session = false;
     {
@@ -10933,6 +11223,19 @@ bool SecureTcpRendezvousConnection(
 
 void PortableHostApp::RendezvousWorker() {
   int uuid_mismatch_auto_id_retry_count = 0;
+  SOCKET direct_access_listener = INVALID_SOCKET;
+  unsigned short direct_access_listener_port = 0;
+  std::wstring direct_access_listener_error;
+  auto close_direct_access_listener = [&]() {
+    if (direct_access_listener != INVALID_SOCKET) {
+      closesocket(direct_access_listener);
+      direct_access_listener = INVALID_SOCKET;
+    }
+    direct_access_listener_port = 0;
+  };
+  ScopeExit direct_access_listener_scope([&]() {
+    close_direct_access_listener();
+  });
   while (!stop_rendezvous_.load()) {
     std::vector<unsigned char> public_key_bytes;
     std::vector<unsigned char> secret_key_bytes;
@@ -11082,6 +11385,818 @@ void PortableHostApp::RendezvousWorker() {
       return true;
     };
 
+    auto run_desktop_session_loop =
+        [this, session_config, describe_receive_state](
+            TcpFramedConnection* connection,
+            const std::wstring& channel_name,
+            const std::wstring& connected_remote_id,
+            const std::wstring& connected_remote_name,
+            std::wstring* session_status) -> bool {
+      active_session_connected_.store(true);
+      StoreActiveSessionIdentity(connected_remote_id, connected_remote_name);
+
+      std::atomic<int> active_clipboard_file_requests{0};
+      std::atomic<int> next_clipboard_stream_id{1};
+      std::vector<std::weak_ptr<RemoteFileClipboardBridge>> file_clipboard_brokers;
+      auto describe_file_clipboard_progress = [&]() -> std::wstring {
+        return channel_name + L" serving on-demand clipboard file transfer";
+      };
+      auto collect_live_file_clipboard_brokers =
+          [&]() -> std::vector<std::shared_ptr<RemoteFileClipboardBridge>> {
+        std::vector<std::shared_ptr<RemoteFileClipboardBridge>> live_brokers;
+        auto cursor = file_clipboard_brokers.begin();
+        while (cursor != file_clipboard_brokers.end()) {
+          std::shared_ptr<RemoteFileClipboardBridge> broker = cursor->lock();
+          if (broker == nullptr) {
+            cursor = file_clipboard_brokers.erase(cursor);
+            continue;
+          }
+          live_brokers.push_back(broker);
+          ++cursor;
+        }
+        return live_brokers;
+      };
+      auto close_file_clipboard_brokers = [&](const std::wstring& reason) {
+        for (const std::shared_ptr<RemoteFileClipboardBridge>& broker :
+             collect_live_file_clipboard_brokers()) {
+          broker->Close(reason);
+        }
+      };
+      auto install_remote_file_clipboard =
+          [&](const std::vector<unsigned char>& descriptor_payload,
+              std::wstring* transfer_status) -> bool {
+        auto broker = std::make_shared<RemoteFileClipboardBridge>(
+            connection,
+            &active_clipboard_file_requests,
+            &next_clipboard_stream_id,
+            channel_name);
+        if (!broker->InitializeFromFileGroupDescriptorPayload(
+                descriptor_payload,
+                transfer_status)) {
+          if (transfer_status != nullptr && !transfer_status->empty()) {
+            *transfer_status =
+                channel_name + L" failed to parse remote clipboard file descriptors: " +
+                *transfer_status;
+          }
+          return false;
+        }
+        file_clipboard_brokers.push_back(broker);
+        if (window_ != nullptr) {
+          auto* request = new (std::nothrow) InstallRemoteFileClipboardRequest();
+          if (request == nullptr) {
+            if (transfer_status != nullptr) {
+              *transfer_status = channel_name + L" failed to allocate clipboard install request";
+            }
+            return false;
+          }
+          request->bridge = broker;
+          if (!PostMessageW(
+                  window_,
+                  kAppInstallRemoteFileClipboard,
+                  0,
+                  reinterpret_cast<LPARAM>(request))) {
+            delete request;
+            if (transfer_status != nullptr) {
+              *transfer_status = channel_name + L" failed to post clipboard install request";
+            }
+            return false;
+          }
+        }
+        if (transfer_status != nullptr) {
+          *transfer_status =
+              channel_name + L" received remote file clipboard; file contents will stream on paste";
+        }
+        return true;
+      };
+      auto handle_file_contents_response = [&](const CliprdrMessageData& cliprdr) -> bool {
+        for (const std::shared_ptr<RemoteFileClipboardBridge>& broker :
+             collect_live_file_clipboard_brokers()) {
+          if (broker->HandleFileContentsResponse(cliprdr)) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      std::atomic<bool> stop_video_thread{false};
+      std::atomic<bool> request_immediate_video{true};
+      std::atomic<bool> video_thread_failed{false};
+      std::atomic<bool> sent_video_frame{false};
+      std::atomic<bool> video_force_keyframe{true};
+      std::atomic<int> active_display_width{0};
+      std::atomic<int> active_display_height{0};
+      const std::wstring effective_codec = GetEffectivePreferredCodec(session_config.preferred_codec);
+      const bool start_with_vp8 = _wcsicmp(effective_codec.c_str(), L"vp8-software") == 0;
+      std::atomic<bool> active_codec_is_vp8{start_with_vp8};
+      std::wstring video_thread_error;
+      Win32Mutex video_thread_error_mutex;
+      Win32Thread video_thread;
+      const bool video_thread_started = video_thread.Start([&]() {
+        GdiScreenCapturer screen_capturer;
+        MinimalH264Encoder h264_encoder;
+        MinimalVp8Encoder vp8_encoder;
+        DesktopFrameBgra desktop_frame;
+        std::vector<unsigned char> nv12_frame;
+        std::vector<unsigned char> i420_frame;
+        const auto video_epoch = std::chrono::steady_clock::now();
+        auto next_video_deadline = video_epoch;
+        bool use_vp8_runtime = start_with_vp8;
+
+        while (!stop_video_thread.load() && !IsActiveSessionStopRequested()) {
+          if (active_clipboard_file_requests.load() > 0) {
+            Sleep(20);
+            continue;
+          }
+          const auto now = std::chrono::steady_clock::now();
+          if (!request_immediate_video.load() && now < next_video_deadline) {
+            Sleep(2);
+            continue;
+          }
+          request_immediate_video.store(false);
+
+          std::wstring capture_error;
+          if (!screen_capturer.Capture(&desktop_frame, &capture_error)) {
+            Win32LockGuard error_lock(video_thread_error_mutex);
+            video_thread_error = L"screen capture failed: " + capture_error;
+            video_thread_failed.store(true);
+            return;
+          }
+
+          active_display_width.store(desktop_frame.width);
+          active_display_height.store(desktop_frame.height);
+          if (desktop_frame.width < 1 || desktop_frame.height < 1) {
+            Win32LockGuard error_lock(video_thread_error_mutex);
+            video_thread_error = L"captured invalid display dimensions";
+            video_thread_failed.store(true);
+            return;
+          }
+
+          const int64_t pts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              now - video_epoch).count();
+          std::vector<std::vector<unsigned char>> encoded_frames;
+          std::vector<bool> key_flags;
+          const bool request_keyframe = video_force_keyframe.exchange(false);
+
+          auto encode_vp8_frame = [&](bool keyframe_requested, std::wstring* error_text) -> bool {
+            if (!vp8_encoder.IsInitializedFor(desktop_frame.width, desktop_frame.height)) {
+              std::wstring vp8_error;
+              if (!vp8_encoder.Initialize(
+                      desktop_frame.width,
+                      desktop_frame.height,
+                      session_config.video_fps,
+                      session_config.video_bitrate_kbps,
+                      &vp8_error)) {
+                if (error_text != nullptr) {
+                  *error_text = L"VP8 encoder init failed: " + vp8_error;
+                }
+                return false;
+              }
+              video_force_keyframe.store(true);
+            }
+
+            std::wstring vp8_error;
+            if (!ConvertBgraToI420(desktop_frame, &i420_frame, &vp8_error)) {
+              if (error_text != nullptr) {
+                *error_text = L"BGRA to I420 failed: " + vp8_error;
+              }
+              return false;
+            }
+
+            if (!vp8_encoder.EncodeFrame(
+                    i420_frame,
+                    keyframe_requested,
+                    pts_ms,
+                    &encoded_frames,
+                    &key_flags,
+                    &vp8_error)) {
+              if (error_text != nullptr) {
+                *error_text = L"VP8 encode failed: " + vp8_error;
+              }
+              return false;
+            }
+            return true;
+          };
+
+          if (use_vp8_runtime) {
+            std::wstring vp8_error;
+            if (!encode_vp8_frame(request_keyframe, &vp8_error)) {
+              Win32LockGuard error_lock(video_thread_error_mutex);
+              video_thread_error = vp8_error;
+              video_thread_failed.store(true);
+              return;
+            }
+          } else {
+            if (!h264_encoder.IsInitializedFor(desktop_frame.width, desktop_frame.height)) {
+              if (!h264_encoder.Initialize(
+                      desktop_frame.width,
+                      desktop_frame.height,
+                      session_config.video_fps,
+                      session_config.video_bitrate_kbps,
+                      &capture_error)) {
+                const std::wstring h264_error = L"H264 encoder init failed: " + capture_error;
+                use_vp8_runtime = true;
+                active_codec_is_vp8.store(true);
+                video_force_keyframe.store(true);
+                encoded_frames.clear();
+                key_flags.clear();
+                std::wstring vp8_error;
+                if (!encode_vp8_frame(true, &vp8_error)) {
+                  Win32LockGuard error_lock(video_thread_error_mutex);
+                  video_thread_error = h264_error + L"; VP8 fallback failed: " + vp8_error;
+                  video_thread_failed.store(true);
+                  return;
+                }
+              }
+              video_force_keyframe.store(true);
+            }
+
+            if (!use_vp8_runtime) {
+              ConvertBgraToNv12(desktop_frame, &nv12_frame);
+              if (!h264_encoder.EncodeFrame(
+                      nv12_frame,
+                      request_keyframe,
+                      pts_ms,
+                      &encoded_frames,
+                      &key_flags,
+                      &capture_error)) {
+                const std::wstring h264_error = L"H264 encode failed: " + capture_error;
+                use_vp8_runtime = true;
+                active_codec_is_vp8.store(true);
+                video_force_keyframe.store(true);
+                encoded_frames.clear();
+                key_flags.clear();
+                std::wstring vp8_error;
+                if (!encode_vp8_frame(true, &vp8_error)) {
+                  Win32LockGuard error_lock(video_thread_error_mutex);
+                  video_thread_error = h264_error + L"; VP8 fallback failed: " + vp8_error;
+                  video_thread_failed.store(true);
+                  return;
+                }
+              }
+            }
+          }
+
+          if (!encoded_frames.empty()) {
+            const std::vector<unsigned char> video_message = use_vp8_runtime
+                ? EncodeVp8VideoFrameMessage(encoded_frames, key_flags, pts_ms, 0)
+                : EncodeH264VideoFrameMessage(encoded_frames, key_flags, pts_ms, 0);
+            if (!connection->SendFrame(video_message, nullptr)) {
+              Win32LockGuard error_lock(video_thread_error_mutex);
+              video_thread_error = L"video frame send failed";
+              video_thread_failed.store(true);
+              return;
+            }
+            sent_video_frame.store(true);
+          }
+
+          next_video_deadline =
+              now + std::chrono::milliseconds(
+                        1000 / (session_config.video_fps > 0 ? session_config.video_fps : 1));
+        }
+      });
+      if (!video_thread_started) {
+        if (session_status != nullptr) {
+          *session_status = channel_name + L" failed to start video thread";
+        }
+        return false;
+      }
+      auto stop_video_session = [&]() {
+        stop_video_thread.store(true);
+        request_immediate_video.store(true);
+        connection->Abort();
+        if (video_thread.Joinable()) {
+          video_thread.Join();
+        }
+      };
+
+      bool echoed_test_delay = false;
+      std::vector<unsigned char> frame;
+      while (true) {
+        if (IsActiveSessionStopRequested()) {
+          const bool manual_close_requested =
+              active_session_manual_close_requested_.exchange(false);
+          if (manual_close_requested) {
+            connection->SendFrame(
+                EncodeCloseReasonMessage(kLoginMsgClosedManuallyByPeer),
+                nullptr);
+          }
+          close_file_clipboard_brokers(channel_name + L" session stopped");
+          stop_video_session();
+          if (session_status != nullptr) {
+            *session_status = manual_close_requested
+                ? channel_name + L" closed locally"
+                : channel_name + L" stopping active session";
+          }
+          return true;
+        }
+
+        if (video_thread_failed.load()) {
+          close_file_clipboard_brokers(channel_name + L" video thread failed");
+          stop_video_session();
+          if (session_status != nullptr) {
+            Win32LockGuard error_lock(video_thread_error_mutex);
+            *session_status = channel_name + L" " + video_thread_error;
+          }
+          return false;
+        }
+
+        frame.clear();
+        const TcpFramedConnection::ReceiveState post_login_state =
+            connection->ReceiveFrame(&frame, kSessionPollMs, session_status);
+        if (post_login_state == TcpFramedConnection::ReceiveState::kTimeout) {
+          if (session_status != nullptr) {
+            if (active_clipboard_file_requests.load() > 0) {
+              *session_status = describe_file_clipboard_progress();
+            } else {
+              const std::wstring active_codec_label =
+                  active_codec_is_vp8.load() ? L"VP8" : L"H264";
+              *session_status =
+                  channel_name +
+                  (sent_video_frame.load()
+                       ? std::wstring(L" session established; streaming ") + active_codec_label +
+                             L" desktop frames"
+                       : (echoed_test_delay
+                              ? std::wstring(L" session kept alive; preparing first ") +
+                                    active_codec_label + L" desktop frame"
+                              : L" session established; waiting for controller follow-up"));
+            }
+          }
+          continue;
+        }
+        if (post_login_state != TcpFramedConnection::ReceiveState::kFrame) {
+          close_file_clipboard_brokers(
+              channel_name + L" receive " + describe_receive_state(post_login_state));
+          stop_video_session();
+          if (session_status != nullptr) {
+            const std::wstring previous = *session_status;
+            *session_status = channel_name + L" post-login receive " + describe_receive_state(post_login_state);
+            if (!previous.empty()) {
+              *session_status += L": ";
+              *session_status += previous;
+            }
+          }
+          return true;
+        }
+
+        bool found_test_delay = false;
+        bool test_delay_from_client = false;
+        if (TryParseTestDelayMessage(frame, &found_test_delay, &test_delay_from_client) &&
+            found_test_delay) {
+          if (test_delay_from_client) {
+            if (!connection->SendFrame(frame, session_status)) {
+              close_file_clipboard_brokers(channel_name + L" test-delay echo send failed");
+              stop_video_session();
+              if (session_status != nullptr && !session_status->empty()) {
+                *session_status = channel_name + L" test-delay echo send failed: " + *session_status;
+              }
+              return false;
+            }
+            echoed_test_delay = true;
+            if (session_status != nullptr) {
+              *session_status = channel_name + L" session established; echoed controller TestDelay";
+            }
+          } else if (session_status != nullptr) {
+            echoed_test_delay = true;
+            *session_status = channel_name + L" session test-delay acknowledged";
+          }
+          continue;
+        }
+
+        const SessionMessageType session_message = ParseSessionMessage(frame);
+        bool handled_follow_up = false;
+        if (session_message.has_close_reason) {
+          close_file_clipboard_brokers(channel_name + L" controller closed session");
+          stop_video_session();
+          if (session_status != nullptr) {
+            *session_status = channel_name + L" closed by controller";
+            if (!session_message.close_reason.empty()) {
+              *session_status += L": ";
+              *session_status += session_message.close_reason;
+            }
+          }
+          return true;
+        }
+        if (session_message.wants_refresh_video) {
+          video_force_keyframe.store(true);
+          request_immediate_video.store(true);
+          handled_follow_up = true;
+          if (session_status != nullptr) {
+            *session_status = channel_name + L" received refresh_video; scheduling keyframe";
+          }
+        }
+        if (session_message.has_mouse) {
+          HandleMouseEvent(
+              session_message.mouse,
+              active_display_width.load() > 0 ? active_display_width.load() : GetDesktopCaptureBounds().width,
+              active_display_height.load() > 0 ? active_display_height.load() : GetDesktopCaptureBounds().height);
+          request_immediate_video.store(true);
+          handled_follow_up = true;
+        }
+        if (session_message.has_key) {
+          HandleKeyEvent(session_message.key);
+          request_immediate_video.store(true);
+          handled_follow_up = true;
+        }
+        if (!session_message.clipboards.empty()) {
+          handled_follow_up = true;
+          bool updated_text_clipboard = false;
+          for (const ClipboardMessageData& clipboard : session_message.clipboards) {
+            std::wstring clipboard_text;
+            std::wstring clipboard_error;
+            if (!ExtractClipboardWideText(clipboard, &clipboard_text, &clipboard_error)) {
+              if (clipboard.format == kClipboardFormatText && session_status != nullptr &&
+                  !clipboard_error.empty()) {
+                *session_status = channel_name + L" clipboard text update failed: " + clipboard_error;
+              }
+              continue;
+            }
+            if (SetClipboardUnicodeText(clipboard_text, &clipboard_error)) {
+              updated_text_clipboard = true;
+            } else if (session_status != nullptr) {
+              *session_status = channel_name + L" clipboard text update failed: " + clipboard_error;
+            }
+          }
+          if (updated_text_clipboard && session_status != nullptr) {
+            *session_status = channel_name + L" updated remote text clipboard";
+          }
+        }
+        if (session_message.has_cliprdr) {
+          handled_follow_up = true;
+          switch (session_message.cliprdr.kind) {
+            case CliprdrMessageKind::kReady:
+              if (session_status != nullptr) {
+                *session_status = channel_name + L" cliprdr monitor-ready acknowledged";
+              }
+              break;
+            case CliprdrMessageKind::kFiles:
+              if (session_status != nullptr) {
+                *session_status =
+                    channel_name + L" received clipboard file audit (" +
+                    std::to_wstring(session_message.cliprdr.files.size()) + L" item(s))";
+              }
+              break;
+            case CliprdrMessageKind::kFormatList: {
+              int file_descriptor_format_id = 0;
+              int file_contents_format_id = 0;
+              for (const CliprdrFormatData& format : session_message.cliprdr.formats) {
+                if (_wcsicmp(format.format_name.c_str(), L"FileGroupDescriptorW") == 0) {
+                  file_descriptor_format_id = format.id;
+                } else if (_wcsicmp(format.format_name.c_str(), L"FileContents") == 0) {
+                  file_contents_format_id = format.id;
+                }
+              }
+              if (file_descriptor_format_id != 0 &&
+                  file_contents_format_id != 0) {
+                std::wstring clipboard_error;
+                if (!connection->SendFrame(
+                        EncodeCliprdrFormatDataRequestMessage(
+                            file_descriptor_format_id),
+                        &clipboard_error)) {
+                  if (session_status != nullptr) {
+                    *session_status = channel_name + L" cliprdr format-data request failed: " + clipboard_error;
+                  }
+                } else if (session_status != nullptr) {
+                  *session_status = channel_name + L" requesting remote clipboard file descriptors";
+                }
+              } else if (session_status != nullptr) {
+                *session_status = channel_name + L" controller clipboard formats did not include FileGroupDescriptorW/FileContents";
+              }
+              break;
+            }
+            case CliprdrMessageKind::kFormatDataResponse:
+              if (session_message.cliprdr.msg_flags != kCliprdrResponseOk) {
+                if (session_status != nullptr) {
+                  *session_status = channel_name + L" controller rejected clipboard format-data request";
+                }
+              } else if (!install_remote_file_clipboard(
+                             session_message.cliprdr.payload,
+                             session_status)) {
+                if (session_status != nullptr && session_status->empty()) {
+                  *session_status = channel_name + L" clipboard virtual file install failed";
+                }
+              }
+              break;
+            case CliprdrMessageKind::kFileContentsResponse:
+              if (!handle_file_contents_response(session_message.cliprdr) &&
+                  session_status != nullptr && session_status->empty()) {
+                *session_status = channel_name + L" clipboard file response could not be applied";
+              }
+              break;
+            case CliprdrMessageKind::kTryEmpty:
+              close_file_clipboard_brokers(
+                  channel_name + L" remote controller cleared file clipboard");
+              file_clipboard_brokers.clear();
+              if (session_status != nullptr) {
+                *session_status = channel_name + L" remote controller cleared file clipboard state";
+              }
+              break;
+            default:
+              if (session_status != nullptr) {
+                *session_status =
+                    channel_name +
+                    L" received cliprdr follow-up kind=" +
+                    std::to_wstring(static_cast<int>(session_message.cliprdr.kind));
+              }
+              break;
+          }
+        }
+        if (handled_follow_up) {
+          if (session_status != nullptr && session_status->empty() && sent_video_frame.load()) {
+            *session_status = channel_name + L" session established; streaming desktop and handling input";
+          }
+          continue;
+        }
+
+        if (session_status != nullptr) {
+          *session_status =
+              channel_name +
+              L" session established; ignoring follow-up fields=" +
+              FormatObservedFields(ExtractTopLevelMessageFields(frame));
+        }
+        continue;
+      }
+    };
+
+    auto run_minimal_direct_ip_session_over_connection =
+        [this,
+         session_config,
+         session_temporary_password_snapshot,
+         session_fixed_password_snapshot,
+         session_device_uuid_snapshot,
+         generate_numeric_password,
+         describe_receive_state,
+         &run_desktop_session_loop](
+            TcpFramedConnection* connection,
+            const std::wstring& channel_name,
+            const std::wstring& display_remote_id_override,
+            std::wstring* session_status) -> bool {
+      RegisterActiveSessionConnection(connection);
+      std::shared_ptr<void> connection_scope(
+          connection,
+          [this](void* registered_connection) {
+            ClearActiveSessionConnection(registered_connection);
+          });
+      const std::wstring display_remote_id =
+          Trim(display_remote_id_override);
+
+      const std::string hash_salt = session_device_uuid_snapshot.empty()
+                                        ? WideToUtf8(session_config.host_id)
+                                        : WideToUtf8(session_device_uuid_snapshot);
+      const std::string hash_challenge =
+          WideToUtf8(generate_numeric_password(session_config.temporary_password_length));
+      const std::vector<unsigned char> hash_message =
+          EncodeHashMessage(hash_salt, hash_challenge);
+      if (!connection->SendFrame(hash_message, session_status)) {
+        if (session_status != nullptr && !session_status->empty()) {
+          *session_status = channel_name + L" hash send failed: " + *session_status;
+        }
+        return false;
+      }
+
+      const std::vector<unsigned char> expected_temporary_password =
+          (!session_temporary_password_snapshot.empty())
+              ? ComputeRustDeskLoginPasswordDigest(
+                    session_temporary_password_snapshot,
+                    hash_salt,
+                    hash_challenge)
+              : std::vector<unsigned char>();
+      const std::vector<unsigned char> expected_fixed_password =
+          (!session_fixed_password_snapshot.empty())
+              ? ComputeRustDeskLoginPasswordDigest(
+                    session_fixed_password_snapshot,
+                    hash_salt,
+                    hash_challenge)
+              : std::vector<unsigned char>();
+      const auto session_start = std::chrono::steady_clock::now();
+      bool saw_empty_login = false;
+      std::chrono::steady_clock::time_point manual_password_deadline;
+      unsigned long incoming_approval_token = 0;
+      ScopeExit incoming_approval_scope([this, &incoming_approval_token]() {
+        if (incoming_approval_token != 0) {
+          CompleteIncomingApproval(incoming_approval_token);
+          incoming_approval_token = 0;
+        }
+      });
+
+      while (true) {
+        if (IsActiveSessionStopRequested()) {
+          const bool manual_close_requested =
+              active_session_manual_close_requested_.exchange(false);
+          if (manual_close_requested) {
+            connection->SendFrame(
+                EncodeCloseReasonMessage(kLoginMsgClosedManuallyByPeer),
+                nullptr);
+          }
+          if (session_status != nullptr) {
+            *session_status = manual_close_requested
+                ? channel_name + L" closed locally before login"
+                : channel_name + L" session stop requested";
+          }
+          connection->Abort();
+          return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (manual_password_deadline.time_since_epoch().count() != 0) {
+          if (now >= manual_password_deadline) {
+            if (session_status != nullptr) {
+              *session_status = incoming_approval_token != 0
+                  ? channel_name + L" incoming approval timed out"
+                  : channel_name + L" manual password entry timed out";
+            }
+            return true;
+          }
+        } else {
+          const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              now - session_start).count();
+          if (elapsed_ms >= static_cast<long long>(kLoginWaitTimeoutMs)) {
+            if (session_status != nullptr) {
+              *session_status = channel_name + L" login wait timed out";
+            }
+            return false;
+          }
+        }
+
+        unsigned long remaining_ms = 1000;
+        if (manual_password_deadline.time_since_epoch().count() != 0) {
+          const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+              manual_password_deadline - now).count();
+          remaining_ms = remaining > 1000
+              ? 1000
+              : (remaining > 0 ? static_cast<unsigned long>(remaining) : 1);
+        } else {
+          const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+              now - session_start).count();
+          const auto wait_left = static_cast<long long>(kLoginWaitTimeoutMs) - elapsed_ms;
+          remaining_ms = wait_left > 1000
+              ? 1000
+              : (wait_left > 0 ? static_cast<unsigned long>(wait_left) : 1);
+        }
+        bool accepted_temporary_password = false;
+        bool accepted_fixed_password = false;
+        bool accepted_click_approval = false;
+        if (incoming_approval_token != 0) {
+          const IncomingApprovalDecision approval_decision =
+              GetIncomingApprovalDecision(incoming_approval_token);
+          if (approval_decision == IncomingApprovalDecision::kRejected) {
+            const std::vector<unsigned char> rejected =
+                EncodeLoginResponseErrorMessage(kLoginMsgClosedManuallyByPeer);
+            connection->SendFrame(rejected, nullptr);
+            if (session_status != nullptr) {
+              *session_status = channel_name + L" rejected incoming request locally";
+            }
+            return true;
+          }
+          if (approval_decision == IncomingApprovalDecision::kAccepted) {
+            accepted_click_approval = true;
+          }
+        }
+
+        LoginRequestData login_request;
+        if (!accepted_click_approval) {
+          std::vector<unsigned char> frame;
+          const TcpFramedConnection::ReceiveState login_state =
+              connection->ReceiveFrame(&frame, remaining_ms, session_status);
+          if (login_state != TcpFramedConnection::ReceiveState::kFrame) {
+            if (login_state == TcpFramedConnection::ReceiveState::kTimeout &&
+                manual_password_deadline.time_since_epoch().count() != 0) {
+              if (session_status != nullptr) {
+                *session_status = incoming_approval_token != 0
+                    ? channel_name + L" waiting for local approval or password entry"
+                    : channel_name + L" waiting for manual password entry";
+              }
+              continue;
+            }
+            if (session_status != nullptr) {
+              const std::wstring previous = *session_status;
+              *session_status = channel_name + L" receive " + describe_receive_state(login_state);
+              if (!previous.empty()) {
+                *session_status += L": ";
+                *session_status += previous;
+              }
+            }
+            return login_state == TcpFramedConnection::ReceiveState::kClosed ||
+                   manual_password_deadline.time_since_epoch().count() != 0;
+          }
+
+          if (!ParseLoginRequestMessage(frame, &login_request)) {
+            const SessionMessageType session_message = ParseSessionMessage(frame);
+            if (session_message.has_close_reason) {
+              if (session_status != nullptr) {
+                *session_status = channel_name + L" controller closed before login";
+                if (!session_message.close_reason.empty()) {
+                  *session_status += L": ";
+                  *session_status += session_message.close_reason;
+                }
+              }
+              return true;
+            }
+            if (session_status != nullptr) {
+              *session_status = channel_name + L" received plain message, but it was not LoginRequest";
+            }
+            return false;
+          }
+
+          if (login_request.password.empty()) {
+            saw_empty_login = true;
+            if (incoming_approval_token == 0) {
+              incoming_approval_token = BeginIncomingApproval(
+                  display_remote_id.empty()
+                      ? login_request.my_id
+                      : display_remote_id,
+                  display_remote_id.empty()
+                      ? login_request.my_name
+                      : L"");
+            }
+            manual_password_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(kIncomingApprovalTimeoutMs);
+            if (session_status != nullptr) {
+              *session_status =
+                  channel_name + L" received incoming remote request; waiting for approval or password entry";
+            }
+            continue;
+          }
+
+          accepted_temporary_password =
+              !expected_temporary_password.empty() &&
+              login_request.password == expected_temporary_password;
+          accepted_fixed_password =
+              !expected_fixed_password.empty() &&
+              login_request.password == expected_fixed_password;
+          if (!accepted_temporary_password &&
+              !accepted_fixed_password) {
+            const std::vector<unsigned char> wrong_password =
+                EncodeLoginResponseErrorMessage(kLoginMsgWrongPassword);
+            if (!connection->SendFrame(wrong_password, session_status)) {
+              if (session_status != nullptr && !session_status->empty()) {
+                *session_status =
+                    channel_name + L" wrong password response send failed: " + *session_status;
+              }
+              return false;
+            }
+            if (session_status != nullptr) {
+              *session_status =
+                  channel_name + L" rejected LoginRequest with Wrong Password; waiting for retry";
+            }
+            continue;
+          }
+        }
+
+        const std::vector<unsigned char> login_response =
+            EncodeLoginResponsePeerInfoMessage(session_config);
+        if (!connection->SendFrame(login_response, session_status)) {
+          if (session_status != nullptr && !session_status->empty()) {
+            *session_status = channel_name + L" login response send failed: " + *session_status;
+          }
+          return false;
+        }
+
+        if (session_status != nullptr) {
+          if (accepted_fixed_password) {
+            *session_status =
+                channel_name + L" accepted fixed password and sent PeerInfo login response";
+          } else if (accepted_click_approval) {
+            *session_status =
+                channel_name + L" accepted incoming remote request by local confirmation and sent PeerInfo login response";
+          } else {
+            *session_status = saw_empty_login
+                                  ? channel_name + L" accepted manual LoginRequest and sent PeerInfo login response"
+                                  : channel_name + L" accepted LoginRequest and sent PeerInfo login response";
+          }
+        }
+        std::wstring connected_remote_id;
+        std::wstring connected_remote_name;
+        if (accepted_click_approval) {
+          CaptureIncomingApprovalRemoteIdentity(
+              &connected_remote_id,
+              &connected_remote_name);
+        } else if (!display_remote_id.empty()) {
+          connected_remote_id = display_remote_id;
+          connected_remote_name.clear();
+        } else {
+          connected_remote_id = login_request.my_id;
+          connected_remote_name = login_request.my_name;
+        }
+        if (incoming_approval_token != 0) {
+          CompleteIncomingApproval(incoming_approval_token);
+          incoming_approval_token = 0;
+        }
+
+        if (!connection->SendFrame(EncodeCliprdrMonitorReadyMessage(), session_status)) {
+          if (session_status != nullptr && !session_status->empty()) {
+            *session_status = channel_name + L" cliprdr monitor-ready send failed: " + *session_status;
+          }
+          return false;
+        }
+        return run_desktop_session_loop(
+            connection,
+            channel_name,
+            connected_remote_id,
+            connected_remote_name,
+            session_status);
+      }
+    };
+
     auto run_minimal_secure_session_over_connection =
         [this,
          session_config,
@@ -11093,6 +12208,7 @@ void PortableHostApp::RendezvousWorker() {
          describe_receive_state](
                                                       TcpFramedConnection* connection,
                                                       const std::wstring& channel_name,
+                                                      const std::wstring& display_remote_id_override,
                                                       std::wstring* session_status) -> bool {
       RegisterActiveSessionConnection(connection);
       std::shared_ptr<void> connection_scope(
@@ -11100,6 +12216,8 @@ void PortableHostApp::RendezvousWorker() {
           [this](void* registered_connection) {
             ClearActiveSessionConnection(registered_connection);
           });
+      const std::wstring display_remote_id =
+          Trim(display_remote_id_override);
       std::array<unsigned char, crypto_box_PUBLICKEYBYTES> session_curve_public = {};
       std::array<unsigned char, crypto_box_SECRETKEYBYTES> session_curve_secret = {};
       std::vector<unsigned char> signed_id = EncodeSignedIdMessage(
@@ -11321,8 +12439,13 @@ void PortableHostApp::RendezvousWorker() {
           if (login_request.password.empty()) {
             saw_empty_login = true;
             if (incoming_approval_token == 0) {
-              incoming_approval_token =
-                  BeginIncomingApproval(login_request.my_id, login_request.my_name);
+              incoming_approval_token = BeginIncomingApproval(
+                  display_remote_id.empty()
+                      ? login_request.my_id
+                      : display_remote_id,
+                  display_remote_id.empty()
+                      ? login_request.my_name
+                      : L"");
             }
             manual_password_deadline =
                 std::chrono::steady_clock::now() +
@@ -11381,6 +12504,19 @@ void PortableHostApp::RendezvousWorker() {
                                   : channel_name + L" accepted encrypted LoginRequest and sent PeerInfo login response";
           }
         }
+        std::wstring connected_remote_id;
+        std::wstring connected_remote_name;
+        if (accepted_click_approval) {
+          CaptureIncomingApprovalRemoteIdentity(
+              &connected_remote_id,
+              &connected_remote_name);
+        } else if (!display_remote_id.empty()) {
+          connected_remote_id = display_remote_id;
+          connected_remote_name.clear();
+        } else {
+          connected_remote_id = login_request.my_id;
+          connected_remote_name = login_request.my_name;
+        }
         if (incoming_approval_token != 0) {
           CompleteIncomingApproval(incoming_approval_token);
           incoming_approval_token = 0;
@@ -11394,6 +12530,7 @@ void PortableHostApp::RendezvousWorker() {
         }
 
         active_session_connected_.store(true);
+        StoreActiveSessionIdentity(connected_remote_id, connected_remote_name);
 
         std::atomic<int> active_clipboard_file_requests{0};
         std::atomic<int> next_clipboard_stream_id{1};
@@ -11963,7 +13100,7 @@ void PortableHostApp::RendezvousWorker() {
       }
       if (secure) {
         return run_minimal_secure_session_over_connection(
-            &relay_connection, L"relay session", session_status);
+            &relay_connection, L"relay session", L"", session_status);
       }
       return run_minimal_plain_session_over_connection(
           &relay_connection, L"relay session", session_status);
@@ -12151,6 +13288,7 @@ void PortableHostApp::RendezvousWorker() {
       if (!run_minimal_secure_session_over_connection(
               &direct_connection,
               L"direct intranet session",
+              L"",
               session_status)) {
         return false;
       }
@@ -12195,6 +13333,197 @@ void PortableHostApp::RendezvousWorker() {
           session_status);
     };
 
+    auto ensure_direct_access_listener = [&](bool registered) -> bool {
+      if (!session_config.direct_access_enabled) {
+        close_direct_access_listener();
+        direct_access_listener_error.clear();
+        return true;
+      }
+
+      const unsigned short desired_port =
+          (session_config.direct_access_port >= 1 &&
+           session_config.direct_access_port <= 65535)
+              ? static_cast<unsigned short>(session_config.direct_access_port)
+              : static_cast<unsigned short>(kDefaultDirectAccessPort);
+
+      if (direct_access_listener != INVALID_SOCKET &&
+          direct_access_listener_port == desired_port) {
+        return true;
+      }
+
+      close_direct_access_listener();
+
+      SOCKET listener = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+      if (listener == INVALID_SOCKET) {
+        const std::wstring status_text =
+            L"direct IP listen socket create failed, WSA=" +
+            std::to_wstring(WSAGetLastError());
+        if (status_text != direct_access_listener_error) {
+          SetRendezvousStatus(status_text, registered);
+          direct_access_listener_error = status_text;
+        }
+        return false;
+      }
+
+      BOOL reuse_addr = TRUE;
+      setsockopt(
+          listener,
+          SOL_SOCKET,
+          SO_REUSEADDR,
+          reinterpret_cast<const char*>(&reuse_addr),
+          sizeof(reuse_addr));
+
+      sockaddr_in bind_address = {};
+      bind_address.sin_family = AF_INET;
+      bind_address.sin_addr.s_addr = htonl(INADDR_ANY);
+      bind_address.sin_port = htons(desired_port);
+      if (bind(
+              listener,
+              reinterpret_cast<const sockaddr*>(&bind_address),
+              sizeof(bind_address)) != 0) {
+        const std::wstring status_text =
+            L"direct IP listen bind failed on port " +
+            std::to_wstring(desired_port) + L", WSA=" +
+            std::to_wstring(WSAGetLastError());
+        closesocket(listener);
+        if (status_text != direct_access_listener_error) {
+          SetRendezvousStatus(status_text, registered);
+          direct_access_listener_error = status_text;
+        }
+        return false;
+      }
+
+      if (listen(listener, SOMAXCONN) != 0) {
+        const std::wstring status_text =
+            L"direct IP listen failed on port " +
+            std::to_wstring(desired_port) + L", WSA=" +
+            std::to_wstring(WSAGetLastError());
+        closesocket(listener);
+        if (status_text != direct_access_listener_error) {
+          SetRendezvousStatus(status_text, registered);
+          direct_access_listener_error = status_text;
+        }
+        return false;
+      }
+
+      direct_access_listener = listener;
+      direct_access_listener_port = desired_port;
+      direct_access_listener_error.clear();
+      return true;
+    };
+
+    auto try_accept_direct_access_session = [&](bool registered) {
+      if (!ensure_direct_access_listener(registered) ||
+          direct_access_listener == INVALID_SOCKET) {
+        return;
+      }
+
+      fd_set read_set;
+      FD_ZERO(&read_set);
+      FD_SET(direct_access_listener, &read_set);
+      TIMEVAL timeout = {};
+      const int select_result =
+          select(0, &read_set, nullptr, nullptr, &timeout);
+      if (select_result <= 0) {
+        return;
+      }
+
+      sockaddr_storage peer_storage = {};
+      int peer_storage_length = sizeof(peer_storage);
+      SOCKET accepted = accept(
+          direct_access_listener,
+          reinterpret_cast<sockaddr*>(&peer_storage),
+          &peer_storage_length);
+      if (accepted == INVALID_SOCKET) {
+        const int accept_error = WSAGetLastError();
+        if (accept_error != WSAEWOULDBLOCK) {
+          const std::wstring status_text =
+              L"direct IP accept failed, WSA=" +
+              std::to_wstring(accept_error);
+          if (status_text != direct_access_listener_error) {
+            SetRendezvousStatus(status_text, registered);
+            direct_access_listener_error = status_text;
+          }
+        }
+        return;
+      }
+
+      BOOL nodelay = TRUE;
+      setsockopt(
+          accepted,
+          IPPROTO_TCP,
+          TCP_NODELAY,
+          reinterpret_cast<const char*>(&nodelay),
+          sizeof(nodelay));
+
+      bool session_busy = HasActiveSession();
+      if (!session_busy) {
+        Win32LockGuard guard(active_session_mutex_);
+        session_busy = pending_session_requested_;
+      }
+      if (session_busy) {
+        closesocket(accepted);
+        return;
+      }
+
+      std::wstring peer_host;
+      std::array<wchar_t, NI_MAXHOST> host = {};
+      if (GetNameInfoW(
+              reinterpret_cast<sockaddr*>(&peer_storage),
+              peer_storage_length,
+              host.data(),
+              static_cast<DWORD>(host.size()),
+              nullptr,
+              0,
+              NI_NUMERICHOST) == 0) {
+        peer_host = host.data();
+      }
+
+      std::wstring starting_status =
+          L"online, direct IP access request received";
+      if (!peer_host.empty()) {
+        starting_status += L" from ";
+        starting_status += peer_host;
+      }
+      starting_status += L" (";
+      starting_status += std::to_wstring(direct_access_listener_port);
+      starting_status += L")";
+
+      if (!StartActiveSessionThread(
+              starting_status,
+              registered,
+              L"direct IP session failed: ",
+              [run_minimal_direct_ip_session_over_connection,
+               accepted,
+               peer_host](std::wstring* session_status) -> bool {
+                TcpFramedConnection direct_connection;
+                direct_connection.AttachSocket(accepted);
+                return run_minimal_direct_ip_session_over_connection(
+                    &direct_connection,
+                    L"direct IP session",
+                    peer_host,
+                    session_status);
+              })) {
+        closesocket(accepted);
+      }
+    };
+
+    auto wait_with_direct_access =
+        [&](unsigned long total_ms, bool registered) {
+          unsigned long waited_ms = 0;
+          while (!stop_rendezvous_.load() && waited_ms < total_ms) {
+            try_accept_direct_access_session(registered);
+            const unsigned long remaining_ms = total_ms - waited_ms;
+            const unsigned long sleep_ms =
+                remaining_ms > kReceivePollMs ? kReceivePollMs : remaining_ms;
+            if (sleep_ms == 0) {
+              break;
+            }
+            Sleep(sleep_ms);
+            waited_ms += sleep_ms;
+          }
+        };
+
     auto run_tcp_rendezvous = [&]() -> bool {
       std::wstring tcp_error;
       TcpFramedConnection connection;
@@ -12236,6 +13565,7 @@ void PortableHostApp::RendezvousWorker() {
       std::vector<unsigned char> tcp_frame;
 
       while (!stop_rendezvous_.load()) {
+        try_accept_direct_access_session(registered);
         tcp_frame.clear();
         const TcpFramedConnection::ReceiveState state =
             connection.ReceiveFrame(&tcp_frame, kReceivePollMs, &tcp_error);
@@ -12463,6 +13793,7 @@ void PortableHostApp::RendezvousWorker() {
     };
 
     bool should_try_tcp_fallback = !udp_connected && allow_tcp_fallback;
+    try_accept_direct_access_session(false);
     if (udp_connected) {
       bool key_confirmed = false;
       bool registered = false;
@@ -12479,6 +13810,7 @@ void PortableHostApp::RendezvousWorker() {
         std::vector<unsigned char> frame;
 
         while (!stop_rendezvous_.load()) {
+          try_accept_direct_access_session(registered);
           frame.clear();
           const UdpMessageSocket::ReceiveState state =
               socket.ReceiveMessage(&frame, kReceivePollMs, &error_text);
@@ -12715,22 +14047,16 @@ void PortableHostApp::RendezvousWorker() {
     }
 
     if (should_try_tcp_fallback && !stop_rendezvous_.load() && run_tcp_rendezvous()) {
-      for (int wait_count = 0; wait_count < 2 && !stop_rendezvous_.load(); ++wait_count) {
-        Sleep(1000);
-      }
+      wait_with_direct_access(2000, IsRendezvousRegistered());
       continue;
     }
 
     if (!udp_connected) {
-      for (int wait_count = 0; wait_count < 5 && !stop_rendezvous_.load(); ++wait_count) {
-        Sleep(1000);
-      }
+      wait_with_direct_access(5000, IsRendezvousRegistered());
       continue;
     }
 
-    for (int wait_count = 0; wait_count < 2 && !stop_rendezvous_.load(); ++wait_count) {
-      Sleep(1000);
-    }
+    wait_with_direct_access(2000, IsRendezvousRegistered());
   }
 }
 
