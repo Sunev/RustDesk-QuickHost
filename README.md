@@ -4,7 +4,7 @@ Native C++ host-only RustDesk-compatible remote support client for Windows XP / 
 
 ![Downloads](https://img.shields.io/github/downloads/Terence0816/RustDesk-QuickHost/total?label=Downloads)
 [Releases](https://github.com/Terence0816/RustDesk-QuickHost/releases) |
-[Latest Official Build v1.1.2.3](https://github.com/Terence0816/RustDesk-QuickHost/releases/tag/v1.1.2.3) |
+[Latest Official Build v1.1.2.4](https://github.com/Terence0816/RustDesk-QuickHost/releases/tag/v1.1.2.4) |
 [GPL-3.0 License](LICENSE)
 
 English | [繁體中文](#繁體中文)
