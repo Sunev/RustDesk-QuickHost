@@ -629,7 +629,7 @@ constexpr int kCliprdrFileContentsRangeFlag = 0x00000002;
 constexpr size_t kClipboardFileTransferChunkSize = 64 * 1024;
 constexpr size_t kFileTransferBlockSize = 128 * 1024;
 constexpr wchar_t kProjectUrl[] = L"https://github.com/Terence0816/RustDesk-QuickHost";
-constexpr wchar_t kAboutDisplayVersion[] = L"1.1.2.3";
+constexpr wchar_t kAboutDisplayVersion[] = L"1.1.2.4";
 constexpr wchar_t kCppHostVersion[] = L"1.3.0-cpp";
 constexpr wchar_t kAppWindowTitle[] = L"RustDeskQS Host";
 constexpr wchar_t kAppWindowClassName[] = L"RustDeskCppPortableHostWindow";
@@ -1578,6 +1578,10 @@ struct FormattedTextClipboardContent {
   std::vector<unsigned char> html;
   bool has_rtf = false;
   std::vector<unsigned char> rtf;
+  // Excel prefers the native "XML Spreadsheet" clipboard format over
+  // HTML and plain text. Preserving it keeps cell styling and line breaks.
+  bool has_excel_xml = false;
+  std::vector<unsigned char> excel_xml;
 };
 
 enum class CliprdrMessageKind {
@@ -5339,7 +5343,7 @@ void ShowAboutDialogModal(
   }
 
   const int width = ScaleForSystemDpi(540);
-  const int height = ScaleForSystemDpi(320);
+  const int height = ScaleForSystemDpi(400);
   RECT owner_rect = {};
   if (owner != nullptr) {
     GetWindowRect(owner, &owner_rect);
@@ -6091,6 +6095,11 @@ UINT GetLegacyRtfClipboardFormat() {
   return format;
 }
 
+UINT GetExcelXmlSpreadsheetClipboardFormat() {
+  static const UINT format = RegisterClipboardFormatW(L"XML Spreadsheet");
+  return format;
+}
+
 void TrimTrailingZeroBytes(std::vector<unsigned char>* bytes);
 
 bool LooksLikeCfHtmlPayload(const std::vector<unsigned char>& bytes) {
@@ -6283,6 +6292,10 @@ std::wstring BuildFormattedTextClipboardSignature(
     AppendVarintField(5U, 1U, &canonical);
     AppendBytesField(6U, content.rtf, &canonical);
   }
+  if (content.has_excel_xml) {
+    AppendVarintField(7U, 1U, &canonical);
+    AppendBytesField(8U, content.excel_xml, &canonical);
+  }
   if (canonical.empty()) {
     return std::wstring();
   }
@@ -6365,6 +6378,14 @@ bool BuildFormattedTextClipboardMessages(
   }
   clipboards->clear();
 
+  // Excel uses this native format ahead of HTML/plain text. Without it,
+  // rich cell formatting is lost and HTML paste may drop embedded newlines.
+  if (content.has_excel_xml && !content.excel_xml.empty()) {
+    clipboards->push_back(BuildClipboardMessageData(
+        kClipboardFormatSpecial,
+        content.excel_xml,
+        L"XML Spreadsheet"));
+  }
   if (content.has_rtf && !content.rtf.empty()) {
     clipboards->push_back(
         BuildClipboardMessageData(kClipboardFormatRtf, content.rtf));
@@ -6447,6 +6468,20 @@ bool CaptureFormattedTextClipboardContent(
     }
   }
 
+  std::vector<unsigned char> excel_xml_bytes;
+  const UINT excel_xml_format = GetExcelXmlSpreadsheetClipboardFormat();
+  if (excel_xml_format != 0) {
+    handle = GetClipboardData(excel_xml_format);
+    if (handle != nullptr &&
+        CopyClipboardHandleBytes(handle, &excel_xml_bytes, nullptr) &&
+        !excel_xml_bytes.empty()) {
+      // Keep the payload byte-for-byte. Excel's registered format is opaque
+      // clipboard data, so trimming or re-encoding can corrupt it.
+      content->excel_xml = std::move(excel_xml_bytes);
+      content->has_excel_xml = true;
+    }
+  }
+
   std::vector<unsigned char> rtf_bytes;
   UINT rtf_formats[2] = {GetLegacyRtfClipboardFormat(), GetRtfClipboardFormat()};
   for (size_t rtf_index = 0; rtf_index < 2U && !content->has_rtf; ++rtf_index) {
@@ -6467,9 +6502,10 @@ bool CaptureFormattedTextClipboardContent(
   }
 
   close_clipboard();
-  if (!content->has_text && !content->has_html && !content->has_rtf) {
+  if (!content->has_text && !content->has_html && !content->has_rtf &&
+      !content->has_excel_xml) {
     if (error_text != nullptr) {
-      *error_text = L"clipboard does not contain supported text formats";
+      *error_text = L"clipboard does not contain supported formats";
     }
     return false;
   }
@@ -6519,7 +6555,10 @@ bool DecodeFormattedTextClipboardContent(
         (clipboard.format == kClipboardFormatSpecial &&
          (_wcsicmp(clipboard.special_name.c_str(), L"Rich Text Format") == 0 ||
           _wcsicmp(clipboard.special_name.c_str(), L"text/richtext") == 0));
-    if (!is_html && !is_rtf) {
+    const bool is_excel_xml =
+        clipboard.format == kClipboardFormatSpecial &&
+        _wcsicmp(clipboard.special_name.c_str(), L"XML Spreadsheet") == 0;
+    if (!is_html && !is_rtf && !is_excel_xml) {
       continue;
     }
 
@@ -6527,19 +6566,26 @@ bool DecodeFormattedTextClipboardContent(
     if (!GetClipboardPayloadBytes(clipboard, &bytes, &last_error)) {
       continue;
     }
-    TrimTrailingZeroBytes(&bytes);
-    if (is_html) {
-      std::vector<unsigned char> transfer_html;
-      if (ExtractCfHtmlTransferBytes(bytes, &transfer_html, nullptr)) {
-        content->html = std::move(transfer_html);
-        content->has_html = !content->html.empty();
-      } else {
-        content->html = std::move(bytes);
-        content->has_html = !content->html.empty();
-      }
+    if (is_excel_xml) {
+      // Registered clipboard formats are opaque byte payloads. Preserve the
+      // Excel XML Spreadsheet bytes exactly as received.
+      content->excel_xml = std::move(bytes);
+      content->has_excel_xml = !content->excel_xml.empty();
     } else {
-      content->rtf = std::move(bytes);
-      content->has_rtf = true;
+      TrimTrailingZeroBytes(&bytes);
+      if (is_html) {
+        std::vector<unsigned char> transfer_html;
+        if (ExtractCfHtmlTransferBytes(bytes, &transfer_html, nullptr)) {
+          content->html = std::move(transfer_html);
+          content->has_html = !content->html.empty();
+        } else {
+          content->html = std::move(bytes);
+          content->has_html = !content->html.empty();
+        }
+      } else {
+        content->rtf = std::move(bytes);
+        content->has_rtf = true;
+      }
     }
     found_supported_format = true;
   }
@@ -6600,9 +6646,10 @@ bool SetClipboardBinaryFormatData(
 bool SetClipboardFormattedTextContent(
     const FormattedTextClipboardContent& content,
     std::wstring* error_text) {
-  if (!content.has_text && !content.has_html && !content.has_rtf) {
+  if (!content.has_text && !content.has_html && !content.has_rtf &&
+      !content.has_excel_xml) {
     if (error_text != nullptr) {
-      *error_text = L"no supported text formats were provided";
+      *error_text = L"no supported clipboard formats were provided";
     }
     return false;
   }
@@ -6628,6 +6675,22 @@ bool SetClipboardFormattedTextContent(
 
   bool set_any = false;
   std::wstring first_error;
+
+  if (content.has_excel_xml && !content.excel_xml.empty()) {
+    const UINT excel_xml_format = GetExcelXmlSpreadsheetClipboardFormat();
+    if (excel_xml_format != 0) {
+      std::wstring set_error;
+      if (SetClipboardBinaryFormatData(
+              excel_xml_format,
+              content.excel_xml,
+              false,
+              &set_error)) {
+        set_any = true;
+      } else if (first_error.empty()) {
+        first_error = set_error;
+      }
+    }
+  }
 
   if (content.has_rtf && !content.rtf.empty()) {
     const UINT rtf_formats[2] = {GetLegacyRtfClipboardFormat(), GetRtfClipboardFormat()};
@@ -16548,7 +16611,8 @@ void PortableHostApp::RendezvousWorker() {
               if (session_status != nullptr) {
                 *session_status =
                     (remote_formatted_clipboard.has_html ||
-                     remote_formatted_clipboard.has_rtf)
+                     remote_formatted_clipboard.has_rtf ||
+                     remote_formatted_clipboard.has_excel_xml)
                         ? channel_name +
                               L" updated remote formatted clipboard"
                         : channel_name + L" updated remote text clipboard";
@@ -18032,7 +18096,8 @@ void PortableHostApp::RendezvousWorker() {
                 if (session_status != nullptr) {
                   *session_status =
                       (remote_formatted_clipboard.has_html ||
-                       remote_formatted_clipboard.has_rtf)
+                       remote_formatted_clipboard.has_rtf ||
+                       remote_formatted_clipboard.has_excel_xml)
                           ? channel_name +
                                 L" updated remote formatted clipboard"
                           : channel_name + L" updated remote text clipboard";
