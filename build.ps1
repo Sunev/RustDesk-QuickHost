@@ -48,74 +48,11 @@ $archArg = if ($Platform -eq 'x86') { 'x86' } else { 'x64' }
 $machineArg = if ($Platform -eq 'x86') { '/MACHINE:X86' } else { '/MACHINE:X64' }
 
 # ============================================================
-# Zstd source build configuration
+# Include directories
 # ============================================================
-$zstdSrcDir = Join-Path $repoRoot 'third_party\zstd'
-$zstdVersion = 'v1.5.7'
-$zstdPatchFile = Join-Path $repoRoot 'third_party\zstd-winxp.diff'
-
 $includeDirs = @(
     $srcDir
 )
-
-# ============================================================
-# Step 1: Download/update zstd source (always executed first, as zstd is a required dependency)
-# ============================================================
-function Invoke-EnsureZstdSource {
-    $libCommonDir = Join-Path $zstdSrcDir 'lib\common'
-    
-    if (-not (Test-Path (Join-Path $libCommonDir 'zstd_common.c'))) {
-        $gitCommand = Get-Command git.exe -ErrorAction SilentlyContinue
-        if (-not $gitCommand) {
-            throw "git.exe was not found. Install Git to clone zstd source code."
-        }
-
-        if (Test-Path $zstdSrcDir) {
-            Write-Host "[build] Removing incomplete zstd source directory: $zstdSrcDir"
-            Remove-Item -Recurse -Force $zstdSrcDir -ErrorAction SilentlyContinue
-        }
-
-        Write-Host "[build] Cloning zstd $zstdVersion source code to $zstdSrcDir"
-        New-Item -ItemType Directory -Path $zstdSrcDir -Force | Out-Null
-        & $gitCommand.Source clone --depth 1 --branch $zstdVersion https://github.com/facebook/zstd.git $zstdSrcDir
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to clone zstd source code into $zstdSrcDir."
-        }
-        Write-Host "[build] zstd source code cloned successfully."
-    }
-
-    # Apply patch from:
-    # https://github.com/jimmyleocn/zstd-winxp/tree/e14e8dac0d21e486b85bde74ef6fc6574ccbdec2
-    $patchAppliedMarker = Join-Path $zstdSrcDir '.xp_patch_applied'
-    if (-not (Test-Path $patchAppliedMarker)) {
-        Write-Host "[build] Applying Windows XP compatibility patch to zstd source..."
-        
-        $gitCommand = Get-Command git.exe -ErrorAction SilentlyContinue
-        if (-not $gitCommand) {
-            throw "git.exe is required to apply the patch."
-        }
-        
-        Push-Location $zstdSrcDir
-        try {
-            & $gitCommand.Source apply --ignore-whitespace "$zstdPatchFile"
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to apply zstd-winxp.diff patch."
-            }
-            New-Item -ItemType File -Path $patchAppliedMarker -Force | Out-Null
-            Write-Host "[build] Patch applied successfully."
-        } finally {
-            Pop-Location
-        }
-    } else {
-        Write-Host "[build] Windows XP compatibility patch already applied."
-    }
-}
-
-Invoke-EnsureZstdSource
-
-# zstd include directory (the lib directory serves as both source and header directory)
-$zstdIncludeDir = Join-Path $zstdSrcDir 'lib'
-$includeDirs += $zstdIncludeDir
 
 # ============================================================
 # Vcpkg bootstrap
@@ -154,7 +91,7 @@ $env:VCPKG_ROOT = $vcpkgRoot
 # The triplet is defined in third_party/vcpkg_overlays/triplets/
 # ============================================================
 $vcpkgTriplet = if ($Platform -eq 'x86') { 'x86-windows-static-v141xp' } else { 'x64-windows-static' }
-$env:VCPKG_DEFAULT_HOST_TRIPLET = $vcpkgTriplet
+$env:VCPKG_DEFAULT_TRIPLET = $vcpkgTriplet
 
 $overlayTripletsPath = Join-Path $repoRoot 'third_party\vcpkg_overlays\triplets'
 if ($Platform -eq 'x86') {
@@ -277,7 +214,7 @@ if ($env:ZSTD_ROOT) {
 
 # ============================================================
 # Check third-party dependency headers
-# zstd.h is guaranteed to be available via the source code in Step 1
+# All dependencies are now managed through vcpkg (libyuv, libvpx, libsodium, zstd)
 # ============================================================
 $requiredHeaders = @(
     @{ Header = 'libyuv/convert.h'; Name = 'libyuv' },
@@ -302,7 +239,7 @@ foreach ($headerSpec in $requiredHeaders) {
 }
 
 if ($missingDependencies.Count -gt 0) {
-    $requiredVcpkgPackages = @('libyuv', 'libvpx', 'libsodium')
+    $requiredVcpkgPackages = @('libyuv', 'libvpx', 'libsodium', 'zstd')
     $overlayPortsPath = Join-Path $repoRoot 'third_party\vcpkg_overlays\ports'
     Write-Host "[build] Installing missing vcpkg dependencies: $($requiredVcpkgPackages -join ', ')"
 
@@ -317,9 +254,15 @@ if ($missingDependencies.Count -gt 0) {
         throw "Failed to install required vcpkg dependencies for: $($missingDependencies -join ', ')."
     }
 
-    $vcpkgInstalledIncludeDir = Join-Path $vcpkgRoot ("installed\{0}\include" -f $vcpkgTriplet)
-    if ((Test-Path $vcpkgInstalledIncludeDir) -and (-not ($includeDirs -contains $vcpkgInstalledIncludeDir))) {
-        $includeDirs += $vcpkgInstalledIncludeDir
+    # Scan all installed triplet include directories (v141xp, x86-static, x64-static, etc.)
+    $installedRoot = Join-Path $vcpkgRoot 'installed'
+    if (Test-Path $installedRoot) {
+        Get-ChildItem -Path $installedRoot -Directory | ForEach-Object {
+            $candidateIncludeDir = Join-Path $_.FullName 'include'
+            if ((Test-Path $candidateIncludeDir) -and (-not ($includeDirs -contains $candidateIncludeDir))) {
+                $includeDirs += $candidateIncludeDir
+            }
+        }
     }
 
     $missingDependencies = @()
@@ -343,85 +286,7 @@ if ($missingDependencies.Count -gt 0) {
 }
 
 # ============================================================
-# Step 2: Build zstd static library with CMake
-# ============================================================
-$zstdBuildDir = Join-Path $buildDir 'zstd_lib'
-$zstdCmakeDir = Join-Path $zstdSrcDir 'build\cmake'
-
-# CMake (msbuild multi-config generator) places output in configuration subdirectories
-$cmakeConfig = if ($Configuration -eq 'Debug') { 'Debug' } else { 'Release' }
-# Under MSVC, the static library is named zstd_static.lib, located at <build_dir>/lib/<config>/
-$zstdLibOutput = Join-Path $zstdBuildDir ('lib\{0}\zstd_static.lib' -f $cmakeConfig)
-
-# Check if zstd library needs a rebuild
-$zstdNeedsRebuild = $true
-$patchAppliedMarker = Join-Path $zstdSrcDir '.xp_patch_applied'
-if ((Test-Path $zstdLibOutput) -and (Test-Path $patchAppliedMarker)) {
-    $libTimestamp = (Get-Item $zstdLibOutput).LastWriteTime
-    $zstdNeedsRebuild = $false
-    # Check if CMakeLists.txt has been updated
-    $cmakeFile = Join-Path $zstdCmakeDir 'lib\CMakeLists.txt'
-    if (Test-Path $cmakeFile) {
-        $cmakeTimestamp = (Get-Item $cmakeFile).LastWriteTime
-        if ($cmakeTimestamp -gt $libTimestamp) {
-            $zstdNeedsRebuild = $true
-        }
-    }
-}
-
-if ($zstdNeedsRebuild) {
-    Write-Host "[build] Configuring zstd with CMake..."
-    
-    $cmakeArgs = @(
-        '-S', $zstdCmakeDir,
-        '-B', $zstdBuildDir,
-        "-DCMAKE_BUILD_TYPE=$cmakeConfig",
-        '-DZSTD_BUILD_SHARED=OFF',
-        '-DZSTD_BUILD_STATIC=ON',
-        '-DZSTD_BUILD_PROGRAMS=OFF',
-        '-DZSTD_BUILD_TESTS=OFF',
-        '-DZSTD_MULTITHREAD_SUPPORT=ON',
-        '-DZSTD_LEGACY_SUPPORT=OFF'
-    )
-    
-    if ($Platform -eq 'x86') {
-        $cmakeArgs += '-DCMAKE_GENERATOR_PLATFORM=Win32'
-        # For XP-compatible builds, set additional compile flags
-        $cmakeArgs += '-DCMAKE_C_FLAGS="/D_WIN32_WINNT=0x0501 /DWINVER=0x0501"'
-    } else {
-        $cmakeArgs += '-DCMAKE_GENERATOR_PLATFORM=x64'
-    }
-    
-    if (-not $DryRun) {
-        # Run cmake configure
-        $cmakeCmdLine = ('{0}cmake {1}' -f $vcvarsCommandPrefix, ($cmakeArgs -join ' '))
-        Write-Host "[build] Running: cmake configure for zstd"
-        & cmd.exe /d /c $cmakeCmdLine
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to configure zstd with CMake."
-        }
-        
-        # Run cmake build
-        Write-Host "[build] Building zstd static library with CMake..."
-        $cmakeBuildCmd = ('{0}cmake --build "{1}" --config {2} --target libzstd_static' -f $vcvarsCommandPrefix, $zstdBuildDir, $cmakeConfig)
-        & cmd.exe /d /c $cmakeBuildCmd
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to build zstd static library."
-        }
-        Write-Host "[build] zstd static library created: $zstdLibOutput"
-    } else {
-        Write-Host "[build] [DRY RUN] Would run: cmake configure and build for zstd"
-    }
-} else {
-    Write-Host "[build] zstd static library is up to date: $zstdLibOutput"
-}
-
-# Add the built zstd library path to the linker path
-# CMake (msbuild multi-config generator) places library output in lib/<config>/ subdirectory
-$zstdLibDirPath = Join-Path $zstdBuildDir ('lib\{0}' -f $cmakeConfig)
-
-# ============================================================
-# Step 3: Build main project
+# Step 2: Build main project
 # ============================================================
 
 $sourceFiles = @(
@@ -561,15 +426,13 @@ $linkLibs = @(
 # ============================================================
 # Update lib directory paths to match the new triplet names
 # x86-windows-static-v141xp is used for XP-compatible builds
-# Link against the CMake-built zstd_static.lib
+# All dependencies (libyuv, libvpx, libsodium, zstd) built via vcpkg
 # ============================================================
 $libDirs = @()
-$libDirs += $zstdLibDirPath
 $libDirs += (Join-Path $repoRoot 'third_party\vcpkg\installed\x86-windows-static-v141xp\lib')
-$libDirs += (Join-Path $repoRoot 'third_party\vcpkg\installed\x64-windows-static\lib')
 $libDirs += (Join-Path $repoRoot 'third_party\vcpkg\installed\x86-windows-static\lib')
 $libDirs += (Join-Path $repoRoot 'third_party\vcpkg\installed\x64-windows-static\lib')
-$linkLibs += 'yuv.lib', 'vpx.lib', 'libsodium.lib', 'zstd_static.lib'
+$linkLibs += 'yuv.lib', 'vpx.lib', 'libsodium.lib', 'zstd.lib'
 
 # ============================================================
 # Linker flags: critical settings for XP compatibility
